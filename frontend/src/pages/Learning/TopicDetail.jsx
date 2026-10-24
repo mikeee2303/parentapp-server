@@ -1,0 +1,172 @@
+import { useState } from "react";
+import { Link, useParams } from "react-router-dom";
+import ReactMarkdown from "react-markdown";
+import { getTopicById } from "../../data/learningTopics";
+import { useAuth } from "../../context/AuthContext";
+
+export default function TopicDetail() {
+  const { profile } = useAuth();
+  const { topicId } = useParams();
+  const topic = getTopicById(topicId);
+
+  const content = topic
+    ? { overview: topic.summary, steps: topic.steps, dos: topic.dos, donts: topic.donts, keyTakeaway: null }
+    : null;
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState("");
+  const [qaLoading, setQaLoading] = useState(false);
+
+  if (!topic) {
+    return (
+      <main className="page-content">
+        <h1 className="section-title">Topic not found</h1>
+        <Link to="/learn" className="btn-primary">Back to Learning</Link>
+      </main>
+    );
+  }
+
+  const chatParams = new URLSearchParams({
+    prompt: `I want help with: ${topic.title}. Please give step-by-step guidance.`,
+    topic: topic.id,
+  });
+
+  async function askQuestion(e) {
+    e.preventDefault();
+    if (!question.trim()) return;
+    setQaLoading(true);
+    setAnswer("");
+
+    try {
+      const res = await fetch("http://localhost:4000/api/topic-qa", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic_title: topic.title,
+          topic_summary: topic.summary,
+          question: question.trim(),
+          profile,
+        }),
+      });
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = "";
+      setQaLoading(false);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        for (const line of chunk.split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          const raw = line.slice(6).trim();
+          if (raw === "[DONE]") break;
+          try {
+            const token = JSON.parse(raw).choices?.[0]?.delta?.content ?? "";
+            if (token) { accumulated += token; setAnswer(accumulated); }
+          } catch { /* incomplete chunk */ }
+        }
+      }
+    } catch {
+      setQaLoading(false);
+      setAnswer("Couldn't reach the server. Make sure the backend is running.");
+    }
+  }
+
+  return (
+    <main className="page-content topic-detail">
+      <Link to="/learn" className="topic-back">← All topics</Link>
+
+      {/* Hero */}
+      <div className="topic-hero">
+        <div className="topic-hero-icon">{topic.icon}</div>
+        <div>
+          <div className="section-tag">Learning</div>
+          <h1 className="topic-hero-title">{topic.title}</h1>
+          <p className="topic-hero-overview">{content.overview}</p>
+        </div>
+      </div>
+
+      {/* Steps */}
+      <section className="topic-block topic-block-steps">
+        <h3 className="topic-block-heading">
+          <span className="topic-block-num">Step by step</span>
+        </h3>
+        <ol className="topic-steps-list">
+          {content.steps.map((step, i) => (
+            <li key={i} className="topic-step-item">
+              <span className="topic-step-badge">{i + 1}</span>
+              <span>{step}</span>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      {/* Do / Don't */}
+      <div className="topic-columns">
+        <section className="topic-block topic-dos">
+          <h3 className="topic-block-heading">✓ Do</h3>
+          <ul className="topic-checklist">
+            {content.dos.map((item, i) => (
+              <li key={i} className="topic-checklist-item topic-do-item">
+                <span className="topic-check-icon">✓</span>
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <section className="topic-block topic-donts">
+          <h3 className="topic-block-heading">✕ Don&apos;t</h3>
+          <ul className="topic-checklist">
+            {content.donts.map((item, i) => (
+              <li key={i} className="topic-checklist-item topic-dont-item">
+                <span className="topic-check-icon">✕</span>
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      </div>
+
+      {/* AI Q&A */}
+      <section className="topic-qa">
+        <h3 className="topic-qa-title">✨ Ask about this topic</h3>
+        <p className="topic-qa-sub">
+          Have a specific question about {topic.title.toLowerCase()}? Ask the AI directly.
+        </p>
+        <form className="topic-qa-form" onSubmit={askQuestion}>
+          <input
+            type="text"
+            className="topic-qa-input"
+            placeholder={`e.g. "My child is 2, will this work for them?"`}
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+          />
+          <button type="submit" className="btn-primary" disabled={qaLoading || !question.trim()}>
+            {qaLoading ? "Thinking…" : "Ask"}
+          </button>
+        </form>
+        {qaLoading && (
+          <div className="topic-qa-loading">
+            <span /><span /><span />
+          </div>
+        )}
+        {answer && (
+          <div className="topic-qa-answer gpt-markdown">
+            <ReactMarkdown>{answer}</ReactMarkdown>
+          </div>
+        )}
+      </section>
+
+      <div className="topic-actions">
+        <Link to={`/?${chatParams.toString()}`} className="btn-primary">
+          Get AI help on this topic →
+        </Link>
+        <Link to="/calm-tools" className="btn-secondary">
+          Open Calm Tools
+        </Link>
+      </div>
+    </main>
+  );
+}
